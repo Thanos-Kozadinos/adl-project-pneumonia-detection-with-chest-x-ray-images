@@ -1,0 +1,182 @@
+{
+  "cells": [
+    {
+      "cell_type": "code",
+      "source": [
+        "import torch\n",
+        "import torchvision\n",
+        "import torchvision.transforms as transforms\n",
+        "from torch.utils.data import DataLoader\n",
+        "from torchvision import models\n",
+        "import torch.nn as nn\n",
+        "import torch.optim as optim\n",
+        "from torch.utils.tensorboard import SummaryWriter\n"
+      ],
+      "outputs": [],
+      "execution_count": 3,
+      "metadata": {
+        "gather": {
+          "logged": 1715536459210
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Set device\n",
+        "device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n",
+        "\n",
+        "# Data transforms\n",
+        "transform = transforms.Compose([\n",
+        "    transforms.Resize((256, 256)),\n",
+        "    transforms.RandomHorizontalFlip(),\n",
+        "    transforms.ToTensor(),\n",
+        "    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])\n",
+        "])\n",
+        "\n",
+        "# Load data\n",
+        "train_set = torchvision.datasets.ImageFolder(root='chest_xray/chest_xray/train', transform=transform)\n",
+        "val_set = torchvision.datasets.ImageFolder(root='chest_xray/chest_xray/val', transform=transform)\n",
+        "test_set = torchvision.datasets.ImageFolder(root='chest_xray/chest_xray/test', transform=transform)\n",
+        "\n",
+        "train_loader = DataLoader(train_set, batch_size=32, shuffle=True)\n",
+        "val_loader = DataLoader(val_set, batch_size=32, shuffle=False)\n",
+        "test_loader = DataLoader(test_set, batch_size=32, shuffle=False)"
+      ],
+      "outputs": [],
+      "execution_count": 4,
+      "metadata": {
+        "gather": {
+          "logged": 1715536464996
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Model setup\n",
+        "model = models.resnet18(pretrained=True)\n",
+        "num_ftrs = model.fc.in_features\n",
+        "model.fc = nn.Linear(num_ftrs, 2)  # '2' for Pneumonia/Normal classes\n",
+        "model = model.to(device)\n",
+        "\n",
+        "# Loss and optimizer\n",
+        "criterion = nn.CrossEntropyLoss()\n",
+        "optimizer = optim.Adam(model.parameters(), lr=0.001)\n",
+        "\n",
+        "# TensorBoard\n",
+        "writer = SummaryWriter('runs/pneumonia_detection_experiment')"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": "/anaconda/envs/azureml_py310_sdkv2/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.\n  warnings.warn(\n/anaconda/envs/azureml_py310_sdkv2/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=ResNet18_Weights.IMAGENET1K_V1`. You can also use `weights=ResNet18_Weights.DEFAULT` to get the most up-to-date weights.\n  warnings.warn(msg)\n"
+        }
+      ],
+      "execution_count": 5,
+      "metadata": {
+        "gather": {
+          "logged": 1715536465502
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Training loop\n",
+        "num_epochs = 5\n",
+        "for epoch in range(num_epochs):\n",
+        "    for i, (images, labels) in enumerate(train_loader):\n",
+        "        images = images.to(device)\n",
+        "        labels = labels.to(device)\n",
+        "\n",
+        "        # Forward pass\n",
+        "        outputs = model(images)\n",
+        "        loss = criterion(outputs, labels)\n",
+        "\n",
+        "        # Backward and optimize\n",
+        "        optimizer.zero_grad()\n",
+        "        loss.backward()\n",
+        "        optimizer.step()\n",
+        "\n",
+        "        if (i+1) % 100 == 0:\n",
+        "            print(f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}')\n",
+        "            writer.add_scalar('training loss', loss.item(), epoch * len(train_loader) + i)\n",
+        "\n",
+        "torch.save(model, 'model_pretrained.pth')"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "Epoch [1/5], Step [100/163], Loss: 0.0274\nEpoch [2/5], Step [100/163], Loss: 0.0065\nEpoch [3/5], Step [100/163], Loss: 0.0450\nEpoch [4/5], Step [100/163], Loss: 0.0105\nEpoch [5/5], Step [100/163], Loss: 0.1052\n"
+        }
+      ],
+      "execution_count": 6,
+      "metadata": {
+        "gather": {
+          "logged": 1715540149617
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "\n",
+        "# Evaluation\n",
+        "model.eval()\n",
+        "with torch.no_grad():\n",
+        "    correct = 0\n",
+        "    total = 0\n",
+        "    for images, labels in test_loader:\n",
+        "        images = images.to(device)\n",
+        "        labels = labels.to(device)\n",
+        "        outputs = model(images)\n",
+        "        _, predicted = torch.max(outputs.data, 1)\n",
+        "        total += labels.size(0)\n",
+        "        correct += (predicted == labels).sum().item()\n",
+        "\n",
+        "    print('Test Accuracy of the model on the test images: {} %'.format(100 * correct / total))\n",
+        "    writer.add_scalar('test accuracy', 100 * correct / total, epoch)\n",
+        "\n",
+        "writer.close()"
+      ],
+      "outputs": [],
+      "execution_count": 7,
+      "metadata": {}
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "name": "python310-sdkv2",
+      "language": "python",
+      "display_name": "Python 3.10 - SDK v2"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.10.11",
+      "mimetype": "text/x-python",
+      "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+      },
+      "pygments_lexer": "ipython3",
+      "nbconvert_exporter": "python",
+      "file_extension": ".py"
+    },
+    "microsoft": {
+      "ms_spell_check": {
+        "ms_spell_check_language": "en"
+      }
+    },
+    "kernel_info": {
+      "name": "python310-sdkv2"
+    },
+    "nteract": {
+      "version": "nteract-front-end@1.0.0"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 2
+}
